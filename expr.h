@@ -14,14 +14,20 @@
 class Expr;
 using ExprPtr = std::shared_ptr<const Expr>;
 
+inline int  expr_compare(const ExprPtr& a, const ExprPtr& b);
+inline bool expr_less(const ExprPtr& a, const ExprPtr& b);
+
 class Expr {
 public:
     virtual ~Expr() = default;
     virtual double evaluate(const std::map<std::string, double>& env) const = 0;
     virtual std::string to_string() const = 0;
     virtual ExprPtr derivative(const std::string& var) const = 0;
-};
 
+    virtual int type_rank() const = 0;
+    virtual int compare_same_type(const Expr* other) const = 0;
+};
+    
 class Number; class Symbol;
 class Add; class Sub; class Mul; class Div; class Pow;
 class Log; class Exp;
@@ -48,6 +54,15 @@ public:
     double value;
     explicit Number(double v) : value(v) {}
 
+    int type_rank() const override { return 1; }
+
+    int compare_same_type(const Expr* other) const override {
+        const auto *o = static_cast<const Number*> (other);
+        if (value > o->value) return 1;
+        else if (value < o->value) return -1;
+        else return 0;
+    }
+
     double evaluate(const std::map<std::string, double>&) const override {
         return value;
     }
@@ -66,6 +81,16 @@ public:
     std::string name;
     explicit Symbol(std::string n) : name(std::move(n)) {}
 
+    int type_rank() const override { return 2; }
+
+    int compare_same_type(const Expr* other) const override {
+        const auto* o = static_cast<const Symbol*>(other);
+        int cmp = name.compare(o->name);
+        if (cmp < 0) return -1;
+        if (cmp > 0) return 1;
+        return 0;
+    }
+
     double evaluate(const std::map<std::string, double>& env) const override {
         auto it = env.find(name);
         if (it == env.end())
@@ -83,6 +108,15 @@ public:
     ExprPtr left, right;
     Add(ExprPtr l, ExprPtr r) : left(std::move(l)), right(std::move(r)) {}
 
+    int type_rank() const override { return 3; }
+
+    int compare_same_type(const Expr* other) const override {
+        const auto* o = static_cast<const Add*>(other);
+        int c = expr_compare(left, o->left);
+        if (c != 0) return c;
+        return expr_compare(right, o->right);
+    }
+
     double evaluate(const std::map<std::string, double>& env) const override {
         return left->evaluate(env) + right->evaluate(env);
     }
@@ -99,6 +133,15 @@ public:
     ExprPtr left, right;
     Sub(ExprPtr l, ExprPtr r) : left(std::move(l)), right(std::move(r)) {}
 
+    int type_rank() const override { return 4; }
+
+    int compare_same_type(const Expr* other) const override {
+        const auto* o = static_cast<const Sub*>(other);
+        int c = expr_compare(left, o->left);
+        if (c != 0) return c;
+        return expr_compare(right, o->right);
+    }
+
     double evaluate(const std::map<std::string, double>& env) const override {
         return left->evaluate(env) - right->evaluate(env);
     }
@@ -114,6 +157,15 @@ class Mul : public Expr {
 public:
     ExprPtr left, right;
     Mul(ExprPtr l, ExprPtr r) : left(std::move(l)), right(std::move(r)) {}
+
+    int type_rank() const override { return 5; }
+
+    int compare_same_type(const Expr* other) const override {
+        const auto* o = static_cast<const Mul*>(other);
+        int c = expr_compare(left, o->left);
+        if (c != 0) return c;
+        return expr_compare(right, o->right);
+    }
 
     double evaluate(const std::map<std::string, double>& env) const override {
         return left->evaluate(env) * right->evaluate(env);
@@ -134,6 +186,15 @@ class Div : public Expr {
 public:
     ExprPtr left, right;
     Div(ExprPtr l, ExprPtr r) : left(std::move(l)), right(std::move(r)) {}
+
+    int type_rank() const override { return 6; }
+
+    int compare_same_type(const Expr* other) const override {
+        const auto* o = static_cast<const Div*>(other);
+        int c = expr_compare(left, o->left);
+        if (c != 0) return c;
+        return expr_compare(right, o->right);
+    }
 
     double evaluate(const std::map<std::string, double>& env) const override {
         double d = right->evaluate(env);
@@ -158,6 +219,15 @@ class Pow : public Expr {
 public:
     ExprPtr base, exponent;
     Pow(ExprPtr b, ExprPtr e) : base(std::move(b)), exponent(std::move(e)) {}
+
+    int type_rank() const override { return 7; }
+
+    int compare_same_type(const Expr* other) const override {
+        const auto* o = static_cast<const Pow*>(other);
+        int c = expr_compare(base, o->base);
+        if (c != 0) return c;
+        return expr_compare(exponent, o->exponent);
+    }
 
     double evaluate(const std::map<std::string, double>& env) const override {
         return std::pow(base->evaluate(env), exponent->evaluate(env));
@@ -194,6 +264,13 @@ public:
     ExprPtr arg;
     explicit Log(ExprPtr a) : arg(std::move(a)) {}
 
+    int type_rank() const override { return 8; }
+
+    int compare_same_type(const Expr* other) const override {
+        const auto* o = static_cast<const Log*>(other);
+        return expr_compare(arg, o->arg);
+    }
+
     double evaluate(const std::map<std::string, double>& env) const override {
         double v = arg->evaluate(env);
         if (v <= 0.0) throw std::runtime_error("Log of non-positive value");
@@ -212,6 +289,13 @@ class Exp : public Expr {
 public:
     ExprPtr arg;
     explicit Exp(ExprPtr a) : arg(std::move(a)) {}
+
+    int type_rank() const override { return 9; }
+
+    int compare_same_type(const Expr* other) const override {
+        const auto* o = static_cast<const Exp*>(other);
+        return expr_compare(arg, o->arg);
+    }
 
     double evaluate(const std::map<std::string, double>& env) const override {
         return std::exp(arg->evaluate(env));
@@ -283,6 +367,20 @@ inline ExprPtr pool_unary(int tag, ExprPtr a) {
 
 } // namespace detail
 
+
+inline int expr_compare(const ExprPtr& a, const ExprPtr& b) {
+    if (a.get() == b.get()) return 0;
+    int ra = a->type_rank();
+    int rb = b->type_rank();
+    if (ra < rb) return -1;
+    if (ra > rb) return  1;
+    return a->compare_same_type(b.get());
+}
+
+inline bool expr_less(const ExprPtr& a, const ExprPtr& b) {
+    return expr_compare(a, b) < 0;
+}
+
 inline const Number* as_num(const ExprPtr& e) {
     return dynamic_cast<const Number*>(e.get());
 }
@@ -312,10 +410,14 @@ inline ExprPtr make_sym(const std::string& name) {
 }
 
 inline ExprPtr make_add(ExprPtr a, ExprPtr b) {
+    // Enforce Canonical Order (constants left, symbols lexicographic)
+    if (expr_less(b, a)) std::swap(a, b);
+
+    // Simplification
     auto *na = as_num(a), *nb = as_num(b);
-    if (na && nb) return make_num(na->value + nb->value);  // constant fold
-    if (is_num(a, 0)) return b;                             // 0 + b → b
-    if (is_num(b, 0)) return a;                             // a + 0 → a
+    if (na && nb) return make_num(na->value + nb->value);   // constant fold
+    if (is_num(a, 0)) return b;                              // 0 + b → b
+
     return detail::pool_binary<Add>(detail::TAG_ADD, std::move(a), std::move(b));
 }
 
@@ -328,11 +430,16 @@ inline ExprPtr make_sub(ExprPtr a, ExprPtr b) {
 }
 
 inline ExprPtr make_mul(ExprPtr a, ExprPtr b) {
+    // 1. Enforce Canonical Order (constants left, symbols lexicographic)
+    if (expr_less(b, a)) std::swap(a, b);
+
+    // 2. Algebraic Simplification
     auto *na = as_num(a), *nb = as_num(b);
-    if (na && nb) return make_num(na->value * nb->value);  // constant fold
-    if (is_num(a, 0) || is_num(b, 0)) return make_num(0);  // 0 * _ → 0
-    if (is_num(a, 1)) return b;                             // 1 * b → b
-    if (is_num(b, 1)) return a;                             // a * 1 → a
+    if (na && nb) return make_num(na->value * nb->value);   // constant fold
+    if (is_num(a, 0)) return make_num(0);                    // 0 * _ → 0
+    if (is_num(a, 1)) return b;                              // 1 * b → b
+
+    // 3. Hash Pooling
     return detail::pool_binary<Mul>(detail::TAG_MUL, std::move(a), std::move(b));
 }
 
