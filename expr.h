@@ -32,10 +32,6 @@ class Number; class Symbol;
 class Add; class Sub; class Mul; class Div; class Pow;
 class Log; class Exp;
 
-//They enforce:
-//  - Algebraic simplification  (constant folding, identity/annihilation)
-//   - Hash-consed expression pool  (DAG, not tree)
-
 inline ExprPtr make_num(double v);
 inline ExprPtr make_sym(const std::string& name);
 inline ExprPtr make_add(ExprPtr a, ExprPtr b);
@@ -103,7 +99,7 @@ public:
     }
 };
 
-class Add : public Expr {
+class Add: public Expr {
 public:
     ExprPtr left, right;
     Add(ExprPtr l, ExprPtr r) : left(std::move(l)), right(std::move(r)) {}
@@ -366,6 +362,16 @@ inline ExprPtr pool_unary(int tag, ExprPtr a) {
 }
 
 } // namespace detail
+  
+
+template<typename Map, typename Key>
+ExprPtr try_pool(Map& pool, const Key& key) {
+    auto it = pool.find(key);
+    if (it != pool.end())
+        if (auto sp = it->second.lock())
+            return sp;
+    return nullptr;
+}
 
 
 inline int expr_compare(const ExprPtr& a, const ExprPtr& b) {
@@ -391,9 +397,7 @@ inline bool is_num(const ExprPtr& e, double v) {
 
 inline ExprPtr make_num(double v) {
     static std::unordered_map<double, std::weak_ptr<const Expr>> pool;
-    auto it = pool.find(v);
-    if (it != pool.end())
-        if (auto sp = it->second.lock()) return sp;
+    if (auto sp = try_pool(pool, v)) return sp;
     auto ptr = std::make_shared<const Number>(v);
     pool[v] = ptr;
     return ptr;
@@ -401,9 +405,7 @@ inline ExprPtr make_num(double v) {
 
 inline ExprPtr make_sym(const std::string& name) {
     static std::unordered_map<std::string, std::weak_ptr<const Expr>> pool;
-    auto it = pool.find(name);
-    if (it != pool.end())
-        if (auto sp = it->second.lock()) return sp;
+    if (auto sp = try_pool(pool, name)) return sp;
     auto ptr = std::make_shared<const Symbol>(name);
     pool[name] = ptr;
     return ptr;
