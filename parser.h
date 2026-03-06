@@ -2,13 +2,44 @@
 
 #include "lexer.h"
 #include "expr.h"
+#include <vector>
 
 class Parser {
-    Lexer& lexer;
-    Token cur_token;
+    //Lexer& lexer;
+    //Token cur_token;
+    
+    std::vector<Token> tokens;
+    size_t pos = 0;
 
     void advance() {
-        cur_token = lexer.next_token();
+        if (pos < tokens.size()) pos++;
+    }
+
+    Token cur() {
+        return tokens[pos];    
+    }
+    
+    void inject_implicit_mul(Lexer& lexer) {
+        Token prev = {TokenType::END, ""};
+        Token t = lexer.next_token();
+
+        while (t.type != TokenType::END) {
+            bool prev_is_value = (prev.type == TokenType::NUMBER || prev.type == TokenType::SYMBOL || prev.type == TokenType::RPAREN);
+        
+            bool cur_starts_term = (t.type == TokenType::NUMBER || t.type == TokenType::SYMBOL || t.type == TokenType::LPAREN);
+
+            // Don't insert implicit mul before '(' if prev is a known function name
+            bool prev_is_func = (prev.type == TokenType::SYMBOL &&
+                                 (prev.value == "ln" || prev.value == "exp"));
+
+            if (prev_is_value && cur_starts_term && !prev_is_func)
+                tokens.push_back({TokenType::MUL, "*"});
+            tokens.push_back(t);
+            prev = t;
+            t = lexer.next_token(); 
+        }
+
+        tokens.push_back({TokenType::END, ""});
     }
 
     int get_binding_pow(TokenType type) {
@@ -27,18 +58,18 @@ class Parser {
     }
 
 public:
-    explicit Parser(Lexer& l) : lexer(l) {
-        advance();
+    explicit Parser(Lexer& lexer){
+        inject_implicit_mul(lexer);
     }
 
     ExprPtr parse_expression(int rbp = 0) {
-        Token t = cur_token;
+        Token t = cur();
         advance();
 
         ExprPtr left = nud(t);
 
-        while (rbp < get_binding_pow(cur_token.type)) {
-            t = cur_token;
+        while (rbp < get_binding_pow(cur().type)) {
+            t = cur();
             advance();
             left = led(t, left);
         }
@@ -52,12 +83,12 @@ public:
 
             case TokenType::SYMBOL: {
                 // Check for known functions: ln(), exp()
-                if (cur_token.type == TokenType::LPAREN &&
+                if (cur().type == TokenType::LPAREN &&
                     (t.value == "ln" || t.value == "exp"))
                 {
                     advance(); // consume '('
-                    ExprPtr arg = parse_expression();
-                    if (cur_token.type != TokenType::RPAREN)
+                    ExprPtr arg = parse_expression(0);
+                    if (cur().type != TokenType::RPAREN)
                         throw std::runtime_error("Expected ')' after function argument");
                     advance(); // consume ')'
                     if (t.value == "ln")  return make_log(arg);
@@ -72,14 +103,14 @@ public:
 
             case TokenType::LPAREN: {
                 ExprPtr expr = parse_expression();
-                if (cur_token.type != TokenType::RPAREN)
+                if (cur().type != TokenType::RPAREN)
                     throw std::runtime_error("Expected ')'");
                 advance();
                 return expr;
             }
 
             default:
-                throw std::runtime_error("Unexpected token: " + t.value);
+                throw std::runtime_error("Unexpected NUD token: " + t.value);
         }
     }
 

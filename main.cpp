@@ -3,7 +3,13 @@
 #include <string>
 
 #include "parser.h"
+#include "simplify.h"
 using namespace std;
+
+void print_step(const string& label, ExprPtr e) {
+    ExprPtr simplified = Simplifier::simplify(e);
+    cout << label << " : " << simplified->to_string() << endl; 
+}
 
 int main() {
     try {
@@ -22,6 +28,36 @@ int main() {
             cout << "f''(x)  : " << d2->to_string() << "\n";
             ExprPtr d3 = d2->derivative("x");
             cout << "f'''(x) : " << d3->to_string() << "\n\n";
+        }
+
+        {
+            cout << "implicit multiplication test (2x^2)\n";
+
+            string input = "2x^2 + (2x)^2";
+            Lexer lex(input);
+            Parser parser(lex);
+            ExprPtr f = parser.parse_expression();
+
+            cout << "Input string is 2x^2 + (2x)^2\n";
+            print_step("parsed and simplified", f);
+
+            ExprPtr d = f->derivative("x");
+            print_step("d/dx", d);
+            cout << endl << endl;
+        }
+
+        {
+            cout << "Explicit Differentiation (y as function of x)\n";
+
+            ExprPtr x = make_sym("x");
+            ExprPtr y = make_sym("y", "x"); //y is dependednt on x
+            
+            ExprPtr f = make_mul(x, y);
+            cout << "f(x,y) : " << f->to_string() << "\n";
+
+            ExprPtr df_dx = Simplifier::simplify(f->derivative("x"));
+            print_step("d/dx (x,y) ", df_dx);
+            cout << endl << endl;
         }
 
         {
@@ -57,6 +93,19 @@ int main() {
         }
 
         {
+            cout << "Identity collapse: exp(ln(x))\n";
+
+            string input =  "exp(ln(x^2))";
+            Lexer lex(input);
+            Parser parser(lex);
+            ExprPtr f = Simplifier::simplify(parser.parse_expression());
+
+            cout << "oriignal : exp(ln(x^2))\n";
+            cout << "Simplified: " << f->to_string() << "\n";
+            cout << endl <<endl; 
+        }
+
+        {
             cout << "Transcendental: exp(2*x) + ln(x) \n";
             string input = "exp(2*x) + ln(x)";
             Lexer lex(input);
@@ -80,18 +129,23 @@ int main() {
             cout << "DAG Identity (hash consing) \n";
             ExprPtr x1 = make_sym("x");
             ExprPtr x2 = make_sym("x");
-            cout << "make_sym(\"x\") called twice —> same pointer? "
+            cout << "make_sym(\"x\") called twice -> same pointer? "
                       << (x1.get() == x2.get() ? "YES" : "NO") << "\n";
 
             ExprPtr n1 = make_num(42);
             ExprPtr n2 = make_num(42);
-            cout << "make_num(42) called twice —> same pointer? "
+            cout << "make_num(42) called twice -> same pointer? "
                       << (n1.get() == n2.get() ? "YES" : "NO") << "\n";
 
             ExprPtr a1 = make_add(x1, n1);
             ExprPtr a2 = make_add(x2, n2);
-            cout << "make_add(x,42) twice —> same pointer? "
+            cout << "make_add(x,42) twice -> same pointer? "
                       << (a1.get() == a2.get() ? "YES" : "NO") << "\n\n";
+
+            ExprPtr m1 = make_mul(x1, n1);
+            ExprPtr m2 = make_mul(n2, x2);
+            cout << "42*x vs x*42 twice -> same pointer? "
+                    << ((m1.get() == m2.get()) ? "YES" : "NO") << "\n\n";
         }
 
     } catch (const exception& e) {

@@ -31,9 +31,10 @@ public:
 class Number; class Symbol;
 class Add; class Sub; class Mul; class Div; class Pow;
 class Log; class Exp;
+class Derivative;
 
 inline ExprPtr make_num(double v);
-inline ExprPtr make_sym(const std::string& name);
+inline ExprPtr make_sym(const std::string& name, const std::string& dep = "");
 inline ExprPtr make_add(ExprPtr a, ExprPtr b);
 inline ExprPtr make_sub(ExprPtr a, ExprPtr b);
 inline ExprPtr make_mul(ExprPtr a, ExprPtr b);
@@ -41,6 +42,7 @@ inline ExprPtr make_div(ExprPtr a, ExprPtr b);
 inline ExprPtr make_pow(ExprPtr a, ExprPtr b);
 inline ExprPtr make_log(ExprPtr a);
 inline ExprPtr make_exp(ExprPtr a);
+inline ExprPtr make_derivative(ExprPtr expr, const std::string& var);
 
 inline const Number* as_num(const ExprPtr& e);
 inline bool is_num(const ExprPtr& e, double v);
@@ -75,16 +77,17 @@ public:
 class Symbol : public Expr {
 public:
     std::string name;
-    explicit Symbol(std::string n) : name(std::move(n)) {}
+    std::string depends_on;
+
+    explicit Symbol(std::string n, std::string dep = "") 
+        : name(std::move(n)), depends_on(std::move(dep)) {}
 
     int type_rank() const override { return 2; }
 
     int compare_same_type(const Expr* other) const override {
         const auto* o = static_cast<const Symbol*>(other);
-        int cmp = name.compare(o->name);
-        if (cmp < 0) return -1;
-        if (cmp > 0) return 1;
-        return 0;
+        if (name != o->name) return name.compare(o->name);
+        return depends_on.compare(o->depends_on);
     }
 
     double evaluate(const std::map<std::string, double>& env) const override {
@@ -95,7 +98,9 @@ public:
     }
     std::string to_string() const override { return name; }
     ExprPtr derivative(const std::string& var) const override {
-        return make_num(name == var ? 1 : 0);
+        if (name == var) return make_num(1);
+        if (depends_on == var) return make_derivative(make_sym(name, depends_on), var);
+        return make_num(0);
     }
 };
 
@@ -305,6 +310,35 @@ public:
     }
 };
 
+class Derivative : public Expr {
+public:
+    ExprPtr target;
+    std::string var;
+
+    Derivative(ExprPtr t, std::string v) : target(std::move(t)), var(std::move(v)) {}
+
+    int type_rank() const override { return 10; } // Higher rank than standard operators
+
+    int compare_same_type(const Expr* other) const override {
+        const auto* o = static_cast<const Derivative*>(other);
+        if (var != o->var) return var.compare(o->var);
+        return expr_compare(target, o->target);
+    }
+
+    double evaluate(const std::map<std::string, double>&) const override {
+        throw std::runtime_error("Cannot evaluate an unresolved symbolic derivative: d/d" + var);
+    }
+
+    std::string to_string() const override {
+        return "d(" + target->to_string() + ")/d" + var;
+    }
+
+    ExprPtr derivative(const std::string& v) const override {
+        // Second derivative: d/dv ( d/dvar (target) )
+        return make_derivative(std::make_shared<const Derivative>(target, var), v);
+    }
+};
+
 namespace detail {
 
 struct BinaryKeyHash {
@@ -325,6 +359,15 @@ struct UnaryKeyHash {
 
 using BinaryKey = std::tuple<int, const Expr*, const Expr*>;
 using UnaryKey  = std::pair<int, const Expr*>;
+using DerivKey  = std::pair<const Expr*, std::string>;
+
+struct DerivKeyHash {
+    size_t operator()(const DerivKey& k) const {
+        size_t h = std::hash<const void*>{}(k.first);
+        h ^= std::hash<std::string>{}(k.second) * 2654435761u;
+        return h;
+    }
+};
 
 inline auto& binary_pool() {
     static std::unordered_map<BinaryKey, std::weak_ptr<const Expr>, BinaryKeyHash> p;
@@ -334,8 +377,12 @@ inline auto& unary_pool() {
     static std::unordered_map<UnaryKey, std::weak_ptr<const Expr>, UnaryKeyHash> p;
     return p;
 }
+inline auto& deriv_pool() {
+    static std::unordered_map<DerivKey, std::weak_ptr<const Expr>, DerivKeyHash> p;
+    return p;
+}
 
-enum NodeTag { TAG_ADD, TAG_SUB, TAG_MUL, TAG_DIV, TAG_POW, TAG_LOG, TAG_EXP };
+enum NodeTag { TAG_ADD, TAG_SUB, TAG_MUL, TAG_DIV, TAG_POW, TAG_LOG, TAG_EXP, TAG_DERIV };
 
 template <typename NodeT>
 inline ExprPtr pool_binary(int tag, ExprPtr a, ExprPtr b) {
@@ -403,11 +450,12 @@ inline ExprPtr make_num(double v) {
     return ptr;
 }
 
-inline ExprPtr make_sym(const std::string& name) {
+inline ExprPtr make_sym(const std::string& name, const std::string& dep) {
     static std::unordered_map<std::string, std::weak_ptr<const Expr>> pool;
-    if (auto sp = try_pool(pool, name)) return sp;
-    auto ptr = std::make_shared<const Symbol>(name);
-    pool[name] = ptr;
+    std::string key = name + "@" + dep; // Combine name and dependency for pooling
+    if (auto sp = try_pool(pool, key)) return sp;
+    auto ptr = std::make_shared<const Symbol>(name, dep);
+    pool[key] = ptr;
     return ptr;
 }
 
@@ -478,4 +526,19 @@ inline ExprPtr make_exp(ExprPtr a) {
     if (auto* la = dynamic_cast<const Log*>(a.get()))                // e^(ln x) → x
         return la->arg;
     return detail::pool_unary<Exp>(detail::TAG_EXP, std::move(a));
+}
+
+inline ExprPtr make_derivative(ExprPtr target, const std::string& var) {
+    // 1. Structural Simplification: d/dx (constant) -> 0
+    if (dynamic_cast<const Number*>(target.get())) return make_num(0);
+
+    // 2. Hash-Consing Pool
+    detail::DerivKey key{target.get(), var};
+    auto& pool = detail::deriv_pool();
+    auto it = pool.find(key);
+    if (it != pool.end())
+        if (auto sp = it->second.lock()) return sp;
+    auto ptr = std::make_shared<const Derivative>(std::move(target), var);
+    pool[key] = ptr;
+    return ptr;
 }
