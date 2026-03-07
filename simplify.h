@@ -162,5 +162,45 @@ namespace Simplifier {
         ExprPtr bottom_up_expr = simplify_children(e);
         return apply_rules(bottom_up_expr);
     }
+ 
 
+inline ExprPtr expand_derivative(const ExprPtr& e){
+    if (!e) return nullptr;
+
+    if (auto* deriv = dynamic_cast<const Derivative*>(e.get())) {
+        if (!dynamic_cast<const Symbol*>(deriv->target.get())) {
+            ExprPtr expanded = deriv->target->derivative(deriv->var);
+
+            for (int i = 1; i < deriv->order; i++) expanded = expand_derivative(expanded);
+
+            return expand_derivative(expanded);
+        }
+
+        return e;
+    }
+
+    if (auto* add = dynamic_cast<const  Add*>(e.get())) {
+        return make_add(expand_derivative(add->left), expand_derivative(add->right));
+    } 
+    if (auto* sub = dynamic_cast<const  Sub*>(e.get())) {
+        return make_sub(expand_derivative(sub->left), expand_derivative(sub->right));
+    }
+ 
+    if (auto* mul = dynamic_cast<const  Mul*>(e.get())) {
+        return make_mul(expand_derivative(mul->left), expand_derivative(mul->right));
+    }
+    if (auto* div = dynamic_cast<const  Div*>(e.get())) {
+        return make_div(expand_derivative(div->left), expand_derivative(div->right));
+    }
+    if (auto* ex = dynamic_cast<const Exp*> (e.get())) {
+        return make_exp(expand_derivative(ex->arg));
+    }
+    if (auto* pow = dynamic_cast<const Pow*> (e.get())) {
+        return make_pow(expand_derivative(pow->base), expand_derivative(pow->exponent));
+    }
+    if (auto* log = dynamic_cast<const Log*> (e.get())) { 
+        return make_log(expand_derivative(log->arg));
+    }
+    return e; //number, symbol
 }
+} // simplifier 

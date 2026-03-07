@@ -42,7 +42,7 @@ inline ExprPtr make_div(ExprPtr a, ExprPtr b);
 inline ExprPtr make_pow(ExprPtr a, ExprPtr b);
 inline ExprPtr make_log(ExprPtr a);
 inline ExprPtr make_exp(ExprPtr a);
-inline ExprPtr make_derivative(ExprPtr expr, const std::string& var);
+inline ExprPtr make_derivative(ExprPtr expr, const std::string& var, int order = 1);
 
 inline const Number* as_num(const ExprPtr& e);
 inline bool is_num(const ExprPtr& e, double v);
@@ -314,14 +314,23 @@ class Derivative : public Expr {
 public:
     ExprPtr target;
     std::string var;
+    int order;
 
-    Derivative(ExprPtr t, std::string v) : target(std::move(t)), var(std::move(v)) {}
+    Derivative(ExprPtr t, std::string v, int o) : target(std::move(t)), var(std::move(v)), order(o) {}
 
     int type_rank() const override { return 10; } // Higher rank than standard operators
 
     int compare_same_type(const Expr* other) const override {
         const auto* o = static_cast<const Derivative*>(other);
-        if (var != o->var) return var.compare(o->var);
+        // Sort by variable "x" vs "t"
+        int cmp_var = var.compare(o->var);
+        if (cmp_var != 0) return cmp_var;
+        
+        // Sort by order y'' > y'
+        if (order < o->order) return -1;
+        if (order > o->order) return 1;
+        
+        // Sort by target expression
         return expr_compare(target, o->target);
     }
 
@@ -330,12 +339,18 @@ public:
     }
 
     std::string to_string() const override {
-        return "d(" + target->to_string() + ")/d" + var;
+        if (order == 1) return "d(" + target->to_string() + ")/d" + var;
+        return "d^" + std::to_string(order) + "(" + target->to_string() + ")/d" + var + "^" + std::to_string(order);
     }
 
     ExprPtr derivative(const std::string& v) const override {
-        // Second derivative: d/dv ( d/dvar (target) )
-        return make_derivative(std::make_shared<const Derivative>(target, var), v);
+        // if  differentiating w.r.t the same variable, increase the order: d/dx (d/dx y) = d^2/dx^2 y
+        if (v == var) return make_derivative(std::make_shared<const Derivative>(target, var, order+1), v);
+
+        // PDEs or mixed partials: d/dt (d/dx y) = d^2/dt dx y
+        // to enforce clairaut's theorem, we sort the variables in the key so that d^2/dt dx y and d^2/dx dt y are considered the same
+        // for strict ODEs, we can just throw an error
+        throw std::runtime_error("Mixed partial derivatives not supported in this implementation");
     }
 };
 
@@ -359,12 +374,13 @@ struct UnaryKeyHash {
 
 using BinaryKey = std::tuple<int, const Expr*, const Expr*>;
 using UnaryKey  = std::pair<int, const Expr*>;
-using DerivKey  = std::pair<const Expr*, std::string>;
+using DerivKey  = std::tuple<const Expr*, std::string, int>;
 
 struct DerivKeyHash {
     size_t operator()(const DerivKey& k) const {
-        size_t h = std::hash<const void*>{}(k.first);
-        h ^= std::hash<std::string>{}(k.second) * 2654435761u;
+        size_t h = std::hash<const void*>{}(std::get<0>(k));
+        h ^= std::hash<std::string>{}(std::get<1>(k)) * 2654435761u;
+        h ^= std::hash<int>{}(std::get<2>(k)) * 40503u;
         return h;
     }
 };
@@ -528,17 +544,21 @@ inline ExprPtr make_exp(ExprPtr a) {
     return detail::pool_unary<Exp>(detail::TAG_EXP, std::move(a));
 }
 
-inline ExprPtr make_derivative(ExprPtr target, const std::string& var) {
-    // 1. Structural Simplification: d/dx (constant) -> 0
+inline ExprPtr make_derivative(ExprPtr target, const std::string& var, int order) {
+    if (order == 0) return target;
     if (dynamic_cast<const Number*>(target.get())) return make_num(0);
 
-    // 2. Hash-Consing Pool
-    detail::DerivKey key{target.get(), var};
+    //flattening logic = d^m/dx^m ( d^n(y)/dx^n ) -> d^(m+n)y / dx^(m+n)
+    if (auto* inner_deriv = dynamic_cast<const Derivative*>(target.get())) {
+        if (inner_deriv->var == var) {
+            return make_derivative(inner_deriv->target, var, inner_deriv->order + order);
+        }
+    }
+
+    detail::DerivKey key{target.get(), var, order};
     auto& pool = detail::deriv_pool();
-    auto it = pool.find(key);
-    if (it != pool.end())
-        if (auto sp = it->second.lock()) return sp;
-    auto ptr = std::make_shared<const Derivative>(std::move(target), var);
+    if (auto sp = try_pool(pool, key)) return sp;
+    auto ptr = std::make_shared<const Derivative>(std::move(target), var, order);
     pool[key] = ptr;
     return ptr;
 }
