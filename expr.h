@@ -7,9 +7,9 @@
 #include <cmath>
 #include <sstream>
 #include <stdexcept>
-#include <tuple>
+#include <vector>
+#include <algorithm>
 #include <functional>
-
 
 class Expr;
 using ExprPtr = std::shared_ptr<const Expr>;
@@ -23,18 +23,16 @@ public:
     virtual double evaluate(const std::map<std::string, double>& env) const = 0;
     virtual std::string to_string() const = 0;
     virtual ExprPtr derivative(const std::string& var) const = 0;
-
     virtual int type_rank() const = 0;
     virtual int compare_same_type(const Expr* other) const = 0;
 };
-    
-class Number; class Symbol;
-class Add; class Sub; class Mul; class Div; class Pow;
-class Log; class Exp;
-class Derivative;
+
+class Number; class Symbol; class Apply;
 
 inline ExprPtr make_num(double v);
 inline ExprPtr make_sym(const std::string& name, const std::string& dep = "");
+inline ExprPtr make_apply(const std::string& head, std::vector<ExprPtr> args,
+                          const std::string& dv = "", int dord = 0);
 inline ExprPtr make_add(ExprPtr a, ExprPtr b);
 inline ExprPtr make_sub(ExprPtr a, ExprPtr b);
 inline ExprPtr make_mul(ExprPtr a, ExprPtr b);
@@ -46,54 +44,39 @@ inline ExprPtr make_derivative(ExprPtr expr, const std::string& var, int order =
 
 inline const Number* as_num(const ExprPtr& e);
 inline bool is_num(const ExprPtr& e, double v);
+inline const Apply* as_apply(const ExprPtr& e);
+inline const Apply* as_apply(const ExprPtr& e, const std::string& head);
 
 class Number : public Expr {
 public:
     double value;
     explicit Number(double v) : value(v) {}
-
     int type_rank() const override { return 1; }
-
     int compare_same_type(const Expr* other) const override {
-        const auto *o = static_cast<const Number*> (other);
-        if (value > o->value) return 1;
-        else if (value < o->value) return -1;
-        else return 0;
+        auto *o = static_cast<const Number*>(other);
+        return (value > o->value) - (value < o->value);
     }
-
-    double evaluate(const std::map<std::string, double>&) const override {
-        return value;
-    }
+    double evaluate(const std::map<std::string, double>&) const override { return value; }
     std::string to_string() const override {
-        std::ostringstream os;
-        os << value;
-        return os.str();
+        std::ostringstream os; os << value; return os.str();
     }
-    ExprPtr derivative(const std::string&) const override {
-        return make_num(0);
-    }
+    ExprPtr derivative(const std::string&) const override { return make_num(0); }
 };
 
 class Symbol : public Expr {
 public:
-    std::string name;
-    std::string depends_on;
-
-    explicit Symbol(std::string n, std::string dep = "") 
+    std::string name, depends_on;
+    explicit Symbol(std::string n, std::string dep = "")
         : name(std::move(n)), depends_on(std::move(dep)) {}
-
     int type_rank() const override { return 2; }
-
     int compare_same_type(const Expr* other) const override {
-        const auto* o = static_cast<const Symbol*>(other);
-        if (name != o->name) return name.compare(o->name);
-        return depends_on.compare(o->depends_on);
+        auto* o = static_cast<const Symbol*>(other);
+        int c = name.compare(o->name);
+        return c ? c : depends_on.compare(o->depends_on);
     }
-
     double evaluate(const std::map<std::string, double>& env) const override {
         auto it = env.find(name);
-        if (it == env.end())
-            throw std::runtime_error("Undefined variable: " + name);
+        if (it == env.end()) throw std::runtime_error("Undefined variable: " + name);
         return it->second;
     }
     std::string to_string() const override { return name; }
@@ -104,358 +87,143 @@ public:
     }
 };
 
-class Add: public Expr {
+// Heads: "Add", "Mul", "Pow", "Log", "Exp", "Deriv"
+// Sub/Div desugared: Sub(a,b) → Add(a, Mul(-1,b)), Div(a,b) → Mul(a, Pow(b,-1))
+
+class Apply : public Expr {
 public:
-    ExprPtr left, right;
-    Add(ExprPtr l, ExprPtr r) : left(std::move(l)), right(std::move(r)) {}
+    std::string head;
+    std::vector<ExprPtr> args;
+    std::string deriv_var;   
+    int deriv_order = 0;     
+
+    Apply(std::string h, std::vector<ExprPtr> a, std::string dv = "", int do_ = 0)
+        : head(std::move(h)), args(std::move(a)), deriv_var(std::move(dv)), deriv_order(do_) {}
 
     int type_rank() const override { return 3; }
 
     int compare_same_type(const Expr* other) const override {
-        const auto* o = static_cast<const Add*>(other);
-        int c = expr_compare(left, o->left);
-        if (c != 0) return c;
-        return expr_compare(right, o->right);
-    }
-
-    double evaluate(const std::map<std::string, double>& env) const override {
-        return left->evaluate(env) + right->evaluate(env);
-    }
-    std::string to_string() const override {
-        return "(" + left->to_string() + " + " + right->to_string() + ")";
-    }
-    ExprPtr derivative(const std::string& var) const override {
-        return make_add(left->derivative(var), right->derivative(var));
-    }
-};
-
-class Sub : public Expr {
-public:
-    ExprPtr left, right;
-    Sub(ExprPtr l, ExprPtr r) : left(std::move(l)), right(std::move(r)) {}
-
-    int type_rank() const override { return 4; }
-
-    int compare_same_type(const Expr* other) const override {
-        const auto* o = static_cast<const Sub*>(other);
-        int c = expr_compare(left, o->left);
-        if (c != 0) return c;
-        return expr_compare(right, o->right);
-    }
-
-    double evaluate(const std::map<std::string, double>& env) const override {
-        return left->evaluate(env) - right->evaluate(env);
-    }
-    std::string to_string() const override {
-        return "(" + left->to_string() + " - " + right->to_string() + ")";
-    }
-    ExprPtr derivative(const std::string& var) const override {
-        return make_sub(left->derivative(var), right->derivative(var));
-    }
-};
-
-class Mul : public Expr {
-public:
-    ExprPtr left, right;
-    Mul(ExprPtr l, ExprPtr r) : left(std::move(l)), right(std::move(r)) {}
-
-    int type_rank() const override { return 5; }
-
-    int compare_same_type(const Expr* other) const override {
-        const auto* o = static_cast<const Mul*>(other);
-        int c = expr_compare(left, o->left);
-        if (c != 0) return c;
-        return expr_compare(right, o->right);
-    }
-
-    double evaluate(const std::map<std::string, double>& env) const override {
-        return left->evaluate(env) * right->evaluate(env);
-    }
-    std::string to_string() const override {
-        return "(" + left->to_string() + " * " + right->to_string() + ")";
-    }
-    // Product rule: d(u*v) = u*dv + du*v
-    ExprPtr derivative(const std::string& var) const override {
-        return make_add(
-            make_mul(left, right->derivative(var)),
-            make_mul(left->derivative(var), right)
-        );
-    }
-};
-
-class Div : public Expr {
-public:
-    ExprPtr left, right;
-    Div(ExprPtr l, ExprPtr r) : left(std::move(l)), right(std::move(r)) {}
-
-    int type_rank() const override { return 6; }
-
-    int compare_same_type(const Expr* other) const override {
-        const auto* o = static_cast<const Div*>(other);
-        int c = expr_compare(left, o->left);
-        if (c != 0) return c;
-        return expr_compare(right, o->right);
-    }
-
-    double evaluate(const std::map<std::string, double>& env) const override {
-        double d = right->evaluate(env);
-        if (d == 0.0) throw std::runtime_error("Division by zero");
-        return left->evaluate(env) / d;
-    }
-    std::string to_string() const override {
-        return "(" + left->to_string() + " / " + right->to_string() + ")";
-    }
-    // Quotient rule: d(u/v) = (du*v - u*dv) / v^2
-    ExprPtr derivative(const std::string& var) const override {
-        return make_div(
-            make_sub(make_mul(left->derivative(var), right),
-                     make_mul(left, right->derivative(var))),
-            make_pow(right, make_num(2))
-        );
-    }
-};
-
-
-class Pow : public Expr {
-public:
-    ExprPtr base, exponent;
-    Pow(ExprPtr b, ExprPtr e) : base(std::move(b)), exponent(std::move(e)) {}
-
-    int type_rank() const override { return 7; }
-
-    int compare_same_type(const Expr* other) const override {
-        const auto* o = static_cast<const Pow*>(other);
-        int c = expr_compare(base, o->base);
-        if (c != 0) return c;
-        return expr_compare(exponent, o->exponent);
-    }
-
-    double evaluate(const std::map<std::string, double>& env) const override {
-        return std::pow(base->evaluate(env), exponent->evaluate(env));
-    }
-    std::string to_string() const override {
-        return "(" + base->to_string() + " ^ " + exponent->to_string() + ")";
-    }
-    // Constant exponent:  d(u^n) = n * u^(n-1) * u'
-    // Variable exponent (logarithmic differentiation):
-    //   d(u^v) = u^v * ( v' * ln(u)  +  v * u' / u )
-    ExprPtr derivative(const std::string& var) const override {
-        auto* n = as_num(exponent);
-        if (n) {
-            // const exponent power rule
-            return make_mul(
-                make_mul(exponent, make_pow(base, make_num(n->value - 1))),
-                base->derivative(var)
-            );
+        auto* o = static_cast<const Apply*>(other);
+        int c = head.compare(o->head);
+        if (c) return c;
+        if (head == "Deriv") {
+            c = deriv_var.compare(o->deriv_var);
+            if (c) return c;
+            if (deriv_order != o->deriv_order) return deriv_order < o->deriv_order ? -1 : 1;
         }
-        // general case via logarithmic differentiation
-        ExprPtr uv = make_pow(base, exponent);
-        return make_mul(uv,
-            make_add(
-                make_mul(exponent->derivative(var), make_log(base)),
-                make_mul(exponent, make_div(base->derivative(var), base))
-            )
-        );
-    }
-};
-
-
-class Log : public Expr {
-public:
-    ExprPtr arg;
-    explicit Log(ExprPtr a) : arg(std::move(a)) {}
-
-    int type_rank() const override { return 8; }
-
-    int compare_same_type(const Expr* other) const override {
-        const auto* o = static_cast<const Log*>(other);
-        return expr_compare(arg, o->arg);
+        size_t n = std::min(args.size(), o->args.size());
+        for (size_t i = 0; i < n; ++i) {
+            c = expr_compare(args[i], o->args[i]);
+            if (c) return c;
+        }
+        if (args.size() != o->args.size()) return args.size() < o->args.size() ? -1 : 1;
+        return 0;
     }
 
     double evaluate(const std::map<std::string, double>& env) const override {
-        double v = arg->evaluate(env);
-        if (v <= 0.0) throw std::runtime_error("Log of non-positive value");
-        return std::log(v);
-    }
-    std::string to_string() const override {
-        return "ln(" + arg->to_string() + ")";
-    }
-    // d(ln u) = u' / u
-    ExprPtr derivative(const std::string& var) const override {
-        return make_div(arg->derivative(var), arg);
-    }
-};
-
-class Exp : public Expr {
-public:
-    ExprPtr arg;
-    explicit Exp(ExprPtr a) : arg(std::move(a)) {}
-
-    int type_rank() const override { return 9; }
-
-    int compare_same_type(const Expr* other) const override {
-        const auto* o = static_cast<const Exp*>(other);
-        return expr_compare(arg, o->arg);
-    }
-
-    double evaluate(const std::map<std::string, double>& env) const override {
-        return std::exp(arg->evaluate(env));
-    }
-    std::string to_string() const override {
-        return "exp(" + arg->to_string() + ")";
-    }
-    // d(e^u) = e^u * u'
-    ExprPtr derivative(const std::string& var) const override {
-        return make_mul(make_exp(arg), arg->derivative(var));
-    }
-};
-
-class Derivative : public Expr {
-public:
-    ExprPtr target;
-    std::string var;
-    int order;
-
-    Derivative(ExprPtr t, std::string v, int o) : target(std::move(t)), var(std::move(v)), order(o) {}
-
-    int type_rank() const override { return 10; } // Higher rank than standard operators
-
-    int compare_same_type(const Expr* other) const override {
-        const auto* o = static_cast<const Derivative*>(other);
-        // Sort by variable "x" vs "t"
-        int cmp_var = var.compare(o->var);
-        if (cmp_var != 0) return cmp_var;
-        
-        // Sort by order y'' > y'
-        if (order < o->order) return -1;
-        if (order > o->order) return 1;
-        
-        // Sort by target expression
-        return expr_compare(target, o->target);
-    }
-
-    double evaluate(const std::map<std::string, double>&) const override {
-        throw std::runtime_error("Cannot evaluate an unresolved symbolic derivative: d/d" + var);
+        if (head == "Add") { double s=0; for (auto& a:args) s+=a->evaluate(env); return s; }
+        if (head == "Mul") { double p=1; for (auto& a:args) p*=a->evaluate(env); return p; }
+        if (head == "Pow") return std::pow(args[0]->evaluate(env), args[1]->evaluate(env));
+        if (head == "Log") { double v=args[0]->evaluate(env); if(v<=0) throw std::runtime_error("Log of non-positive"); return std::log(v); }
+        if (head == "Exp") return std::exp(args[0]->evaluate(env));
+        if (head == "Deriv") throw std::runtime_error("Cannot evaluate symbolic derivative d/d" + deriv_var);
+        throw std::runtime_error("Unknown head: " + head);
     }
 
     std::string to_string() const override {
-        if (order == 1) return "d(" + target->to_string() + ")/d" + var;
-        return "d^" + std::to_string(order) + "(" + target->to_string() + ")/d" + var + "^" + std::to_string(order);
+        auto join = [&](const std::string& sep) {
+            std::string s = "(";
+            for (size_t i = 0; i < args.size(); ++i) { if (i) s += sep; s += args[i]->to_string(); }
+            return s + ")";
+        };
+        if (head == "Add") return join(" + ");
+        if (head == "Mul") return join(" * ");
+        if (head == "Pow") return "(" + args[0]->to_string() + " ^ " + args[1]->to_string() + ")";
+        if (head == "Log") return "ln(" + args[0]->to_string() + ")";
+        if (head == "Exp") return "exp(" + args[0]->to_string() + ")";
+        if (head == "Deriv") {
+            if (deriv_order == 1) return "d(" + args[0]->to_string() + ")/d" + deriv_var;
+            return "d^" + std::to_string(deriv_order) + "(" + args[0]->to_string() + ")/d" + deriv_var + "^" + std::to_string(deriv_order);
+        }
+        return head + "(...)";
     }
 
-    ExprPtr derivative(const std::string& v) const override {
-        // if  differentiating w.r.t the same variable, increase the order: d/dx (d/dx y) = d^2/dx^2 y
-        if (v == var) return make_derivative(std::make_shared<const Derivative>(target, var, order+1), v);
-
-        // PDEs or mixed partials: d/dt (d/dx y) = d^2/dt dx y
-        // to enforce clairaut's theorem, we sort the variables in the key so that d^2/dt dx y and d^2/dx dt y are considered the same
-        // for strict ODEs, we can just throw an error
-        throw std::runtime_error("Mixed partial derivatives not supported in this implementation");
-    }
+    ExprPtr derivative(const std::string& var) const override;
 };
 
 namespace detail {
-
-struct BinaryKeyHash {
-    size_t operator()(const std::tuple<int, const Expr*, const Expr*>& k) const {
-        size_t h = std::hash<int>{}(std::get<0>(k));
-        h ^= std::hash<const void*>{}(std::get<1>(k)) * 2654435761u;
-        h ^= std::hash<const void*>{}(std::get<2>(k)) * 40503u;
+using ApplyKey = std::tuple<std::string, std::vector<const Expr*>, std::string, int>;
+struct ApplyKeyHash {
+    size_t operator()(const ApplyKey& k) const {
+        size_t h = std::hash<std::string>{}(std::get<0>(k));
+        for (auto* p : std::get<1>(k)) h ^= std::hash<const void*>{}(p) + 0x9e3779b9 + (h<<6) + (h>>2);
+        h ^= std::hash<std::string>{}(std::get<2>(k)) * 2654435761u;
+        h ^= std::hash<int>{}(std::get<3>(k)) * 40503u;
         return h;
     }
 };
-struct UnaryKeyHash {
-    size_t operator()(const std::pair<int, const Expr*>& k) const {
-        size_t h = std::hash<int>{}(k.first);
-        h ^= std::hash<const void*>{}(k.second) * 2654435761u;
-        return h;
-    }
-};
-
-using BinaryKey = std::tuple<int, const Expr*, const Expr*>;
-using UnaryKey  = std::pair<int, const Expr*>;
-using DerivKey  = std::tuple<const Expr*, std::string, int>;
-
-struct DerivKeyHash {
-    size_t operator()(const DerivKey& k) const {
-        size_t h = std::hash<const void*>{}(std::get<0>(k));
-        h ^= std::hash<std::string>{}(std::get<1>(k)) * 2654435761u;
-        h ^= std::hash<int>{}(std::get<2>(k)) * 40503u;
-        return h;
-    }
-};
-
-inline auto& binary_pool() {
-    static std::unordered_map<BinaryKey, std::weak_ptr<const Expr>, BinaryKeyHash> p;
+inline auto& apply_pool() {
+    static std::unordered_map<ApplyKey, std::weak_ptr<const Expr>, ApplyKeyHash> p;
     return p;
 }
-inline auto& unary_pool() {
-    static std::unordered_map<UnaryKey, std::weak_ptr<const Expr>, UnaryKeyHash> p;
-    return p;
-}
-inline auto& deriv_pool() {
-    static std::unordered_map<DerivKey, std::weak_ptr<const Expr>, DerivKeyHash> p;
-    return p;
-}
-
-enum NodeTag { TAG_ADD, TAG_SUB, TAG_MUL, TAG_DIV, TAG_POW, TAG_LOG, TAG_EXP, TAG_DERIV };
-
-template <typename NodeT>
-inline ExprPtr pool_binary(int tag, ExprPtr a, ExprPtr b) {
-    BinaryKey key{tag, a.get(), b.get()};
-    auto& pool = binary_pool();
-    auto it = pool.find(key);
-    if (it != pool.end())
-        if (auto sp = it->second.lock()) return sp;
-    auto ptr = std::make_shared<const NodeT>(std::move(a), std::move(b));
-    pool[key] = ptr;
-    return ptr;
-}
-
-template <typename NodeT>
-inline ExprPtr pool_unary(int tag, ExprPtr a) {
-    UnaryKey key{tag, a.get()};
-    auto& pool = unary_pool();
-    auto it = pool.find(key);
-    if (it != pool.end())
-        if (auto sp = it->second.lock()) return sp;
-    auto ptr = std::make_shared<const NodeT>(std::move(a));
-    pool[key] = ptr;
-    return ptr;
-}
-
 } // namespace detail
-  
 
 template<typename Map, typename Key>
 ExprPtr try_pool(Map& pool, const Key& key) {
     auto it = pool.find(key);
-    if (it != pool.end())
-        if (auto sp = it->second.lock())
-            return sp;
+    if (it != pool.end()) if (auto sp = it->second.lock()) return sp;
     return nullptr;
 }
 
-
 inline int expr_compare(const ExprPtr& a, const ExprPtr& b) {
     if (a.get() == b.get()) return 0;
-    int ra = a->type_rank();
-    int rb = b->type_rank();
-    if (ra < rb) return -1;
-    if (ra > rb) return  1;
+    int ra = a->type_rank(), rb = b->type_rank();
+    if (ra != rb) return ra < rb ? -1 : 1;
     return a->compare_same_type(b.get());
 }
+inline bool expr_less(const ExprPtr& a, const ExprPtr& b) { return expr_compare(a, b) < 0; }
 
-inline bool expr_less(const ExprPtr& a, const ExprPtr& b) {
-    return expr_compare(a, b) < 0;
+inline const Number* as_num(const ExprPtr& e) { return dynamic_cast<const Number*>(e.get()); }
+inline bool is_num(const ExprPtr& e, double v) { auto* n = as_num(e); return n && n->value == v; }
+inline const Apply* as_apply(const ExprPtr& e) { return dynamic_cast<const Apply*>(e.get()); }
+inline const Apply* as_apply(const ExprPtr& e, const std::string& head) {
+    auto* a = as_apply(e); return (a && a->head == head) ? a : nullptr;
 }
 
-inline const Number* as_num(const ExprPtr& e) {
-    return dynamic_cast<const Number*>(e.get());
+inline ExprPtr rebuild_apply(const Apply* app, std::vector<ExprPtr> new_args) {
+    if (app->head == "Add") { ExprPtr r=new_args[0]; for (size_t i=1;i<new_args.size();++i) r=make_add(r,new_args[i]); return r; }
+    if (app->head == "Mul") { ExprPtr r=new_args[0]; for (size_t i=1;i<new_args.size();++i) r=make_mul(r,new_args[i]); return r; }
+    if (app->head == "Pow")   return make_pow(new_args[0], new_args[1]);
+    if (app->head == "Log")   return make_log(new_args[0]);
+    if (app->head == "Exp")   return make_exp(new_args[0]);
+    if (app->head == "Deriv") return make_derivative(new_args[0], app->deriv_var, app->deriv_order);
+    return make_apply(app->head, std::move(new_args), app->deriv_var, app->deriv_order);
 }
-inline bool is_num(const ExprPtr& e, double v) {
-    auto* n = as_num(e);
-    return n && n->value == v;
+
+inline ExprPtr map_children(const ExprPtr& e, const std::function<ExprPtr(const ExprPtr&)>& fn) {
+    auto* app = as_apply(e);
+    if (!app) return e;
+    bool changed = false;
+    std::vector<ExprPtr> new_args;
+    new_args.reserve(app->args.size());
+    for (const auto& arg : app->args) {
+        ExprPtr t = fn(arg);
+        if (t.get() != arg.get()) changed = true;
+        new_args.push_back(t);
+    }
+    return changed ? rebuild_apply(app, std::move(new_args)) : e;
+}
+
+inline ExprPtr make_apply(const std::string& head, std::vector<ExprPtr> args,
+                          const std::string& dv, int dord) {
+    std::vector<const Expr*> kp; kp.reserve(args.size());
+    for (auto& a : args) kp.push_back(a.get());
+    detail::ApplyKey key{head, kp, dv, dord};
+    auto& pool = detail::apply_pool();
+    if (auto sp = try_pool(pool, key)) return sp;
+    auto ptr = std::make_shared<const Apply>(head, std::move(args), dv, dord);
+    pool[key] = ptr;
+    return ptr;
 }
 
 inline ExprPtr make_num(double v) {
@@ -468,97 +236,120 @@ inline ExprPtr make_num(double v) {
 
 inline ExprPtr make_sym(const std::string& name, const std::string& dep) {
     static std::unordered_map<std::string, std::weak_ptr<const Expr>> pool;
-    std::string key = name + "@" + dep; // Combine name and dependency for pooling
+    std::string key = name + "@" + dep;
     if (auto sp = try_pool(pool, key)) return sp;
     auto ptr = std::make_shared<const Symbol>(name, dep);
     pool[key] = ptr;
     return ptr;
 }
 
-inline ExprPtr make_add(ExprPtr a, ExprPtr b) {
-    // Enforce Canonical Order (constants left, symbols lexicographic)
-    if (expr_less(b, a)) std::swap(a, b);
+inline ExprPtr make_nary(const std::string& head, ExprPtr a, ExprPtr b,
+                         double identity, double absorb_check = std::nan("")) {
+    std::vector<ExprPtr> parts;
+    auto collect = [&](const ExprPtr& e) {
+        if (auto* app = as_apply(e, head))
+            for (auto& arg : app->args) parts.push_back(arg);
+        else parts.push_back(e);
+    };
+    collect(a); collect(b);
 
-    // Simplification
-    auto *na = as_num(a), *nb = as_num(b);
-    if (na && nb) return make_num(na->value + nb->value);   // constant fold
-    if (is_num(a, 0)) return b;                              // 0 + b → b
+    double accum = identity;
+    std::vector<ExprPtr> symbolic;
+    for (auto& p : parts) {
+        if (auto* n = as_num(p))
+            accum = (head == "Add") ? accum + n->value : accum * n->value;
+        else symbolic.push_back(p);
+    }
+    if (!std::isnan(absorb_check) && accum == absorb_check) return make_num(absorb_check);
 
-    return detail::pool_binary<Add>(detail::TAG_ADD, std::move(a), std::move(b));
+    if (symbolic.empty()) return make_num(accum);
+
+    if (accum != identity) symbolic.push_back(make_num(accum));
+
+    if (symbolic.size() == 1) return symbolic[0];
+
+    std::sort(symbolic.begin(), symbolic.end(), expr_less);
+    return make_apply(head, std::move(symbolic));
 }
+
+inline ExprPtr make_add(ExprPtr a, ExprPtr b) { return make_nary("Add", std::move(a), std::move(b), 0.0); }
+inline ExprPtr make_mul(ExprPtr a, ExprPtr b) { return make_nary("Mul", std::move(a), std::move(b), 1.0, 0.0); }
 
 inline ExprPtr make_sub(ExprPtr a, ExprPtr b) {
     auto *na = as_num(a), *nb = as_num(b);
-    if (na && nb) return make_num(na->value - nb->value);  // constant fold
-    if (is_num(b, 0)) return a;                             // a - 0 → a
-    if (a.get() == b.get()) return make_num(0);             // a - a → 0  (DAG ptr eq)
-    return detail::pool_binary<Sub>(detail::TAG_SUB, std::move(a), std::move(b));
-}
-
-inline ExprPtr make_mul(ExprPtr a, ExprPtr b) {
-    // 1. Enforce Canonical Order (constants left, symbols lexicographic)
-    if (expr_less(b, a)) std::swap(a, b);
-
-    // 2. Algebraic Simplification
-    auto *na = as_num(a), *nb = as_num(b);
-    if (na && nb) return make_num(na->value * nb->value);   // constant fold
-    if (is_num(a, 0)) return make_num(0);                    // 0 * _ → 0
-    if (is_num(a, 1)) return b;                              // 1 * b → b
-
-    // 3. Hash Pooling
-    return detail::pool_binary<Mul>(detail::TAG_MUL, std::move(a), std::move(b));
+    if (na && nb) return make_num(na->value - nb->value);
+    if (is_num(b, 0)) return a;
+    if (a.get() == b.get()) return make_num(0);
+    return make_add(a, make_mul(make_num(-1), b));
 }
 
 inline ExprPtr make_div(ExprPtr a, ExprPtr b) {
     auto *na = as_num(a), *nb = as_num(b);
     if (na && nb && nb->value != 0) return make_num(na->value / nb->value);
-    if (is_num(a, 0)) return make_num(0);                   // 0 / b → 0
-    if (is_num(b, 1)) return a;                             // a / 1 → a
-    if (a.get() == b.get()) return make_num(1);             // a / a → 1  (DAG ptr eq)
-    return detail::pool_binary<Div>(detail::TAG_DIV, std::move(a), std::move(b));
+    if (is_num(a, 0)) return make_num(0);
+    if (is_num(b, 1)) return a;
+    if (a.get() == b.get()) return make_num(1);
+    return make_mul(a, make_pow(b, make_num(-1)));
 }
 
 inline ExprPtr make_pow(ExprPtr a, ExprPtr b) {
     auto *na = as_num(a), *nb = as_num(b);
-    if (na && nb) return make_num(std::pow(na->value, nb->value));  // constant fold
-    if (is_num(b, 0)) return make_num(1);                   // a^0 → 1
-    if (is_num(b, 1)) return a;                             // a^1 → a
-    if (is_num(a, 1)) return make_num(1);                   // 1^b → 1
-    return detail::pool_binary<Pow>(detail::TAG_POW, std::move(a), std::move(b));
+    if (na && nb) return make_num(std::pow(na->value, nb->value));
+    if (is_num(b, 0)) return make_num(1);
+    if (is_num(b, 1)) return a;
+    if (is_num(a, 1)) return make_num(1);
+    return make_apply("Pow", {std::move(a), std::move(b)});
 }
 
-
 inline ExprPtr make_log(ExprPtr a) {
-    auto* na = as_num(a);
-    if (na && na->value > 0) return make_num(std::log(na->value));  // constant fold
-    if (auto* ea = dynamic_cast<const Exp*>(a.get()))                // ln(e^x) → x
-        return ea->arg;
-    return detail::pool_unary<Log>(detail::TAG_LOG, std::move(a));
+    if (auto* n = as_num(a)) { if (n->value > 0) return make_num(std::log(n->value)); }
+    if (auto* e = as_apply(a, "Exp")) return e->args[0];
+    return make_apply("Log", {std::move(a)});
 }
 
 inline ExprPtr make_exp(ExprPtr a) {
-    auto* na = as_num(a);
-    if (na) return make_num(std::exp(na->value));                    // constant fold
-    if (auto* la = dynamic_cast<const Log*>(a.get()))                // e^(ln x) → x
-        return la->arg;
-    return detail::pool_unary<Exp>(detail::TAG_EXP, std::move(a));
+    if (auto* n = as_num(a)) return make_num(std::exp(n->value));
+    if (auto* l = as_apply(a, "Log")) return l->args[0];
+    return make_apply("Exp", {std::move(a)});
 }
 
 inline ExprPtr make_derivative(ExprPtr target, const std::string& var, int order) {
     if (order == 0) return target;
-    if (dynamic_cast<const Number*>(target.get())) return make_num(0);
+    if (as_num(target)) return make_num(0);
+    if (auto* d = as_apply(target, "Deriv"))
+        if (d->deriv_var == var) return make_derivative(d->args[0], var, d->deriv_order + order);
+    return make_apply("Deriv", {std::move(target)}, var, order);
+}
 
-    //flattening logic = d^m/dx^m ( d^n(y)/dx^n ) -> d^(m+n)y / dx^(m+n)
-    if (auto* inner_deriv = dynamic_cast<const Derivative*>(target.get())) {
-        if (inner_deriv->var == var) {
-            return make_derivative(inner_deriv->target, var, inner_deriv->order + order);
-        }
+inline ExprPtr Apply::derivative(const std::string& var) const {
+    if (head == "Add") {
+        ExprPtr r = args[0]->derivative(var);
+        for (size_t i = 1; i < args.size(); ++i) r = make_add(r, args[i]->derivative(var));
+        return r;
     }
-
-    detail::DerivKey key{target.get(), var, order};
-    auto& pool = detail::deriv_pool();
-    if (auto sp = try_pool(pool, key)) return sp;
-    auto ptr = std::make_shared<const Derivative>(std::move(target), var, order);
-    pool[key] = ptr;
-    return ptr;
+    if (head == "Mul") { // N-ary Leibniz
+        ExprPtr r = make_num(0);
+        for (size_t i = 0; i < args.size(); ++i) {
+            ExprPtr term = args[i]->derivative(var);
+            for (size_t j = 0; j < args.size(); ++j)
+                if (j != i) term = make_mul(term, args[j]);
+            r = make_add(r, term);
+        }
+        return r;
+    }
+    if (head == "Pow") {
+        auto* n = as_num(args[1]);
+        if (n) return make_mul(make_mul(args[1], make_pow(args[0], make_num(n->value-1))), args[0]->derivative(var));
+        ExprPtr uv = make_pow(args[0], args[1]);
+        return make_mul(uv, make_add(make_mul(args[1]->derivative(var), make_log(args[0])),
+                                     make_mul(args[1], make_div(args[0]->derivative(var), args[0]))));
+    }
+    if (head == "Log") return make_div(args[0]->derivative(var), args[0]);
+    if (head == "Exp") return make_mul(make_exp(args[0]), args[0]->derivative(var));
+    if (head == "Deriv") {
+        if (var == deriv_var)
+            return make_derivative(std::make_shared<const Apply>(head, args, deriv_var, deriv_order+1), var);
+        throw std::runtime_error("Mixed partials not supported");
+    }
+    throw std::runtime_error("Unknown head in derivative: " + head);
 }

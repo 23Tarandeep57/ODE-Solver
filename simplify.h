@@ -2,205 +2,101 @@
 #include "expr.h"
 #include <vector>
 #include <functional>
+#include <unordered_map>
 
 namespace Simplifier {
     using Rule = std::function<ExprPtr(const ExprPtr&)>;
 
+    // Extract (coefficient, symbolic_base) from a term
     inline std::pair<double, ExprPtr> extract_term(const ExprPtr& e) {
         if (!e) return {0.0, nullptr};
-
-        if (auto* num = dynamic_cast<const Number*>(e.get())) 
-            return {num->value, make_num(1)};
-        
-        if (auto* mul = dynamic_cast<const Mul*>(e.get())) {
-            auto [c1, t1] = extract_term(mul->left);
-            auto [c2, t2] = extract_term(mul->right);
-
-            return {c1*c2, make_mul(t1, t2)};
+        if (auto* num = as_num(e)) return {num->value, make_num(1)};
+        if (auto* mul = as_apply(e, "Mul")) {
+            double coeff = 1.0;
+            std::vector<ExprPtr> symbolic;
+            for (auto& arg : mul->args) {
+                auto [c, t] = extract_term(arg);
+                coeff *= c;
+                if (!is_num(t, 1)) symbolic.push_back(t);
+            }
+            if (symbolic.empty()) return {coeff, make_num(1)};
+            ExprPtr r = symbolic[0];
+            for (size_t i = 1; i < symbolic.size(); ++i) r = make_mul(r, symbolic[i]);
+            return {coeff, r};
         }
-
-        if (auto* div = dynamic_cast<const Div*>(e.get())) {
-            auto [c1, t1] = extract_term(div ->left);
-            auto [c2, t2] = extract_term(div -> right);
-
-            if (c2 == 0.0) throw std::runtime_error("Division by zero in coefficient");
-            return {c1/c2, make_div(t1, t2)};
-        }
-
         return {1.0, e};
     }
 
-
     inline ExprPtr rule_combine_like_terms(const ExprPtr& e) {
-        auto* add = dynamic_cast<const Add*> (e.get());
-        if (!add) return nullptr;
+        auto* add = as_apply(e, "Add");
+        if (!add || add->args.size() < 2) return nullptr;
 
-        auto [c1 ,t1] = extract_term(add->left);
-        auto [c2, t2] = extract_term(add->right);
+        std::unordered_map<const Expr*, double> coeff_map;
+        std::vector<const Expr*> order;
 
-        if (t1.get() == t2.get()) return make_mul(make_num(c1+c2), t1);
-        return nullptr;
+        for (auto& arg : add->args) {
+            auto [c, t] = extract_term(arg);
+            auto it = coeff_map.find(t.get());
+            if (it == coeff_map.end()) { coeff_map[t.get()] = c; order.push_back(t.get()); }
+            else it->second += c;
+        }
+        if (order.size() == add->args.size()) return nullptr;
+
+        ExprPtr result = make_num(0);
+        for (auto* key : order) {
+            double c = coeff_map[key];
+            if (c == 0.0) continue;
+            ExprPtr sym;
+            for (auto& arg : add->args) { auto [c2,t2] = extract_term(arg); if (t2.get()==key) { sym=t2; break; } }
+            result = make_add(result, make_mul(make_num(c), sym));
+        }
+        return result;
     }
 
-    inline ExprPtr rule_subtract_like_terms(const ExprPtr& e) {
-        auto* sub = dynamic_cast<const Sub*> (e.get());
-        if (!sub) return nullptr;
-
-        auto [c1 ,t1] = extract_term(sub->left);
-        auto [c2, t2] = extract_term(sub->right);
-
-        if (t1.get() == t2.get()) return make_mul(make_num(c1-c2), t1);
-        return nullptr;
-    }
-    
-    inline ExprPtr rule_exp_log(const ExprPtr& e){
-        auto* exp_node = dynamic_cast<const Exp*>(e.get());
+    inline ExprPtr rule_exp_log(const ExprPtr& e) {
+        auto* exp_node = as_apply(e, "Exp");
         if (!exp_node) return nullptr;
-
-        auto* log_node = dynamic_cast<const Log*>(exp_node->arg.get());
-        if (!log_node) return nullptr;
-        //exp(log(x)) = x
-        return log_node->arg;
+        auto* log_node = as_apply(exp_node->args[0], "Log");
+        return log_node ? log_node->args[0] : nullptr;
     }
 
-
-    //rule registry
-    static const std:: vector<Rule> rules = {
-        rule_combine_like_terms,
-        rule_subtract_like_terms,
-        rule_exp_log
-    };
+    static const std::vector<Rule> rules = { rule_combine_like_terms, rule_exp_log };
     
     inline ExprPtr apply_rules(ExprPtr e) {
         bool changed = true;
-        int iterations = 0;
-        const int MAX_ITER = 100;
-
-        while (changed && iterations < MAX_ITER) {
+        int iter = 0;
+        while (changed && iter < 100) {
             changed = false;
-            for (const auto& rule: rules) {
-                if (ExprPtr transformed = rule(e)){
-                    e= transformed;
-                    changed = true;
-                    break; // restart rule evaluation one new expression
-                }
+            for (auto& rule : rules) {
+                if (ExprPtr t = rule(e)) { e = t; changed = true; break; }
             }
-            iterations++;
+            iter++;
         }
-        if (iterations == MAX_ITER) {
-            throw std::runtime_error("Simplifer infinite loop detected");
-        }
-
+        if (iter == 100) throw std::runtime_error("Simplifier infinite loop");
         return e;
-
     }
 
-
-
-    ExprPtr simplify(const ExprPtr& e) ;
+    ExprPtr simplify(const ExprPtr& e);
 
     inline ExprPtr simplify_children(const ExprPtr& e) {
-        if (auto* add = dynamic_cast<const Add*>(e.get())) {
-            auto l = simplify(add->left);
-            auto r = simplify(add -> right);
-            if (l.get() != add->left.get() || r.get() != add->right.get()) 
-                return make_add(l,r);
-            return e;
-
-        }
-
-        if (auto* mul = dynamic_cast<const Mul*>(e.get())) {
-            auto l = simplify(mul->left);
-            auto r = simplify(mul->right);
-            if (l.get() != mul->left.get() || r.get() != mul->right.get())
-                return make_mul(l, r);
-            return e;
-        }
-
-        if (auto* sub = dynamic_cast<const Sub*>(e.get())) {
-            auto l = simplify(sub->left);
-            auto r = simplify(sub->right);
-            if (l.get() != sub->left.get() || r.get() != sub->right.get())
-                return make_sub(l, r);
-            return e;
-        }
-
-        if (auto* div = dynamic_cast<const Div*>(e.get())) {
-            auto l = simplify(div->left);
-            auto r = simplify(div->right);
-            if (l.get() != div->left.get() || r.get() != div->right.get())
-                return make_div(l, r);
-            return e;
-        }
-
-        if (auto* pow = dynamic_cast<const Pow*> (e.get())) {
-            auto b = simplify(pow->base);
-            auto ex = simplify(pow->exponent);
-            if (b.get() != pow->base.get() || ex.get() != pow->exponent.get())
-                return make_pow(b, ex);
-        }
-        
-        if (auto* log = dynamic_cast<const Log*>(e.get())) {
-            auto arg = simplify(log->arg);
-            if (arg.get() != log->arg.get()) return make_log(arg);
-            return e;
-        }
-
-        if (auto* exp = dynamic_cast<const Exp*>(e.get())) {
-            auto arg = simplify(exp->arg);
-            if (arg.get() != exp->arg.get()) return make_exp(arg);
-            return e;
-        }
-
-        
-        return e;
+        return map_children(e, [](const ExprPtr& arg) { return simplify(arg); });
     }
 
     inline ExprPtr simplify(const ExprPtr& e) {
         if (!e) return nullptr;
-
-        ExprPtr bottom_up_expr = simplify_children(e);
-        return apply_rules(bottom_up_expr);
+        return apply_rules(simplify_children(e));
     }
- 
 
-inline ExprPtr expand_derivative(const ExprPtr& e){
-    if (!e) return nullptr;
-
-    if (auto* deriv = dynamic_cast<const Derivative*>(e.get())) {
-        if (!dynamic_cast<const Symbol*>(deriv->target.get())) {
-            ExprPtr expanded = deriv->target->derivative(deriv->var);
-
-            for (int i = 1; i < deriv->order; i++) expanded = expand_derivative(expanded);
-
-            return expand_derivative(expanded);
+    inline ExprPtr expand_derivative(const ExprPtr& e) {
+        if (!e) return nullptr;
+        if (auto* d = as_apply(e, "Deriv")) {
+            if (!dynamic_cast<const Symbol*>(d->args[0].get())) {
+                ExprPtr exp = d->args[0]->derivative(d->deriv_var);
+                for (int i = 1; i < d->deriv_order; i++) exp = expand_derivative(exp);
+                return expand_derivative(exp);
+            }
+            return e;
         }
-
-        return e;
+        return map_children(e, expand_derivative);
     }
-
-    if (auto* add = dynamic_cast<const  Add*>(e.get())) {
-        return make_add(expand_derivative(add->left), expand_derivative(add->right));
-    } 
-    if (auto* sub = dynamic_cast<const  Sub*>(e.get())) {
-        return make_sub(expand_derivative(sub->left), expand_derivative(sub->right));
-    }
- 
-    if (auto* mul = dynamic_cast<const  Mul*>(e.get())) {
-        return make_mul(expand_derivative(mul->left), expand_derivative(mul->right));
-    }
-    if (auto* div = dynamic_cast<const  Div*>(e.get())) {
-        return make_div(expand_derivative(div->left), expand_derivative(div->right));
-    }
-    if (auto* ex = dynamic_cast<const Exp*> (e.get())) {
-        return make_exp(expand_derivative(ex->arg));
-    }
-    if (auto* pow = dynamic_cast<const Pow*> (e.get())) {
-        return make_pow(expand_derivative(pow->base), expand_derivative(pow->exponent));
-    }
-    if (auto* log = dynamic_cast<const Log*> (e.get())) { 
-        return make_log(expand_derivative(log->arg));
-    }
-    return e; //number, symbol
-}
-} // simplifier 
+} // namespace Simplifier

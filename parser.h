@@ -5,9 +5,6 @@
 #include <vector>
 
 class Parser {
-    //Lexer& lexer;
-    //Token cur_token;
-    
     std::vector<Token> tokens;
     size_t pos = 0;
 
@@ -119,12 +116,12 @@ public:
         switch (t.type) {
             case TokenType::PLUS:
                 return make_add(left, parse_expression(bp));
-            case TokenType::MINUS:
-                return make_sub(left, parse_expression(bp));
+            case TokenType::MINUS: // Subtraction: a - b → a + (-1 * b)
+                return make_add(left, make_mul(make_num(-1), parse_expression(bp)));
             case TokenType::MUL:
                 return make_mul(left, parse_expression(bp));
-            case TokenType::DIV:
-                return make_div(left, parse_expression(bp));
+            case TokenType::DIV: // Division: a / b → a * b^(-1)
+                return make_mul(left, make_pow(parse_expression(bp), make_num(-1)));
             case TokenType::POW:
                 return make_pow(left, parse_expression(bp - 1)); // right-associative
             default:
