@@ -8,6 +8,7 @@ enum class TokenType {
     NUMBER, SYMBOL,
     PLUS, MINUS, MUL, DIV, POW,
     LPAREN, RPAREN,
+    EQUALS,
     END
 };
 
@@ -50,6 +51,8 @@ public:
             while (pos < src.size() &&
                    (std::isalnum(static_cast<unsigned char>(src[pos])) || src[pos] == '_'))
                 name += get();
+            while (pos < src.size() && src[pos] == '\'')
+                name += get();
             return {TokenType::SYMBOL, name};
         }
 
@@ -62,6 +65,7 @@ public:
             case '^': return {TokenType::POW,"^"};
             case '(': return {TokenType::LPAREN,"("};
             case ')': return {TokenType::RPAREN, ")"};
+            case '=': return {TokenType::EQUALS, "="};
             default:
                 throw std::runtime_error(std::string("Unknown character: ") + c);
         }

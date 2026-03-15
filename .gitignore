@@ -1,1 +1,5 @@
 ode_solver
+__pycache__/
+*.jpeg
+*.png
+*.jpg

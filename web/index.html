@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>CAS Vision Interface</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="container">
+        <h2>Differential Equation Solver</h2>
+
+        <form id="upload-form">
+            <input type="file" id="equation-image" accept="image/png, image/jpeg" required>
+            <button type="submit">Analyze & Solve</button>
+        </form>
+
+        <div id="status"></div>
+        <div id="output-box" class="hidden">
+            <h3>Extracted LaTeX:</h3>
+            <pre id="latex-text"></pre>
+            
+            <h3>Parsed CAS String:</h3>
+            <pre id="cas-text"></pre>
+            
+            <h3>Analytical Solution:</h3>
+            <pre id="solution-text"></pre>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>

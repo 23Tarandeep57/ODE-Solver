@@ -16,18 +16,16 @@ int main(int argc, char *argv[]) {
     return run_tests();
   }
 
+  if (argc < 2) {
+    cout << "Usage: ./ode_solver \"<equation>\"\n       ./ode_solver --test\n";
+    return 1;
+  }
+
   try {
-    // x * y' - 3*y - x^2 = 0
-    ExprPtr x = make_sym("x");
-    ExprPtr y = make_sym("y", "x"); // y depends on x
-    ExprPtr y_prime = make_derivative(y, "x", 1);
-
-    ExprPtr term1 = make_mul(x, y_prime);                             // x * y'
-    ExprPtr term2 = make_mul(make_num(-3), y);                        // -3 * y
-    ExprPtr term3 = make_mul(make_num(-1), make_pow(x, make_num(2))); // -x^2
-
-    // F(x, y, y') = (x*y') + (-3*y) + (-x^2)
-    ExprPtr raw_ode = make_add(make_add(term1, term2), term3);
+    string input_eq = argv[1];
+    Lexer lex(input_eq);
+    Parser parser(lex);
+    ExprPtr raw_ode = parser.parse_expression(0);
 
     cout << "Input ODE: " << raw_ode->to_string() << " = 0\n";
 
@@ -57,12 +55,7 @@ int main(int argc, char *argv[]) {
     ExprPtr solution = LinearFirstOrderSolver::solve(canonical_ode, "x", "y");
     cout << "y(x) = " << solution->to_string() << "\n";
 
-    cout << "\n[Testing reduce_exp Logic]\n";
-    ExprPtr log_term = make_log(x);
-    ExprPtr mul_term = make_mul(make_num(3), log_term); // 3 * ln(x)
-    ExprPtr exp_term = make_exp(mul_term);              // exp(3 * ln(x))
-    cout << "Constructed: exp(3 * ln(x))\n";
-    cout << "Simplified : " << exp_term->to_string() << "\n";
+
 
   } catch (const exception &e) {
     cerr << "Engine Fault: " << e.what() << "\n";

@@ -44,6 +44,8 @@ class Parser {
 
   int get_binding_pow(TokenType type) {
     switch (type) {
+    case TokenType::EQUALS:
+      return 5;
     case TokenType::PLUS:
     case TokenType::MINUS:
       return 10;
@@ -93,7 +95,21 @@ public:
         if (t.value == "exp")
           return make_exp(arg);
       }
-      return make_sym(t.value);
+      
+      std::string name = t.value;
+      int primes = 0;
+      while (!name.empty() && name.back() == '\'') {
+        primes++;
+        name.pop_back();
+      }
+      
+      ExprPtr sym = (name == "y") ? make_sym(name, "x") : make_sym(name);
+      
+      if (primes > 0) {
+        return make_derivative(sym, "x", primes);
+      }
+      
+      return sym;
     }
 
     case TokenType::MINUS:
@@ -116,6 +132,8 @@ public:
   ExprPtr led(const Token &t, ExprPtr left) {
     int bp = get_binding_pow(t.type);
     switch (t.type) {
+    case TokenType::EQUALS:
+      return make_sub(left, parse_expression(bp));
     case TokenType::PLUS:
       return make_add(left, parse_expression(bp));
     case TokenType::MINUS: // Subtraction: a - b → a + (-1 * b)
