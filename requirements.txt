@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+pillow
+pix2text
+opencv-python-headless
+python-multipart

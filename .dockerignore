@@ -1,0 +1,28 @@
+# Ignore the Python virtual environment (The biggest culprit)
+venv/
+.venv/
+env/
+
+# Ignore local caches and IDE metadata
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.vscode/
+.idea/
+
+# Ignore large data or model weights you already have locally
+# (The container will download these or they should be copied selectively)
+*.zip
+*.tar.gz
+*.bin
+*.pth
+datasets/
+models/
+
+# Ignore Git history
+.git/
+.gitignore
+
+# Ignore the compiled binary itself (since we build it inside Docker)
+ode_solver
+cas_engine

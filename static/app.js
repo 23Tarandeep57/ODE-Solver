@@ -13,7 +13,7 @@ document.getElementById('upload-form').addEventListener('submit', async (e) => {
     outputBox.classList.add('hidden');
 
     try {
-        const response = await fetch('http://127.0.0.1:8000/solve', {
+        const response = await fetch('/solve', {
             method: 'POST',
             body: formData
         });

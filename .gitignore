@@ -3,3 +3,5 @@ __pycache__/
 *.jpeg
 *.png
 *.jpg
+venv/
+.venv/
