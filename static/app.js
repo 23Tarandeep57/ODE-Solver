@@ -27,10 +27,21 @@ document.getElementById('upload-form').addEventListener('submit', async (e) => {
         const casText = document.getElementById('cas-text');
 
         statusDiv.textContent = "";
-        latexText.textContent = data.latex;
-        casText.textContent = data.parsed_equation;
-        solutionText.textContent = data.solution;
+        latexText.innerHTML = "$$" + data.latex + "$$";
+        // Parse CasText and SolutionText line by line to preserve newlines and apply AsciiMath to non-empty lines
+        casText.innerHTML = data.parsed_equation.split('\n')
+            .map(line => line.trim() ? "`" + line + "`" : "")
+            .join('<br>');
+        solutionText.innerHTML = data.solution.split('\n')
+            .map(line => line.trim() ? "`" + line.trim() + "`" : "")
+            .join('<br>');
         outputBox.classList.remove('hidden');
+
+        if (window.MathJax) {
+            MathJax.typesetPromise([latexText, casText, solutionText]).catch(function (err) {
+                console.error(err.message);
+            });
+        }
 
     } catch (error) {
         statusDiv.textContent = `[Engine Fault]: ${error.message}`;

@@ -166,21 +166,64 @@ public:
   }
 
   std::string to_string() const override {
-    auto join = [&](const std::string &sep) {
+    if (head == "Add") {
       std::string s = "(";
       for (size_t i = 0; i < args.size(); ++i) {
-        if (i)
-          s += sep;
-        s += args[i]->to_string();
+        std::string termStr = args[i]->to_string();
+        
+        // Handle negative terms cleanly (e.g. `a - b` instead of `a + -1 * b`)
+        bool is_neg = false;
+        if (auto *m = as_apply(args[i], "Mul")) {
+          if (!m->args.empty()) {
+            if (auto *num = as_num(m->args[0])) {
+               if (num->value < 0) is_neg = true;
+            }
+          }
+        } else if (auto *num = as_num(args[i])) {
+          if (num->value < 0) is_neg = true;
+        }
+
+        if (i > 0) {
+          if (is_neg) {
+            s += " - ";
+            // Remove the minus sign from the term string for printing
+            // It's safe to just strip the first character if it's a negative number
+            // or replace "-1 " with "" if it's a Mul. Wait, let's just use a simple replace.
+            if (termStr.rfind("-1 ", 0) == 0) termStr = termStr.substr(3);
+            else if (termStr.rfind("-", 0) == 0) termStr = termStr.substr(1);
+          } else {
+            s += " + ";
+          }
+        }
+        s += termStr;
       }
       return s + ")";
-    };
-    if (head == "Add")
-      return join(" + ");
-    if (head == "Mul")
-      return join(" * ");
-    if (head == "Pow")
-      return "(" + args[0]->to_string() + " ^ " + args[1]->to_string() + ")";
+    }
+    if (head == "Mul") {
+      std::string s = "";
+      for (size_t i = 0; i < args.size(); ++i) {
+        if (i == 0 && is_num(args[i], -1.0) && args.size() > 1) {
+            s += "-";
+            continue;
+        }
+        if (i > 0 && as_num(args[i])) { 
+            s += " * "; 
+        } else if (i > 0 && s != "-") {
+            s += " "; 
+        }
+        s += args[i]->to_string();
+      }
+      return s;
+    }
+    if (head == "Pow") {
+      // For AsciiMath, `a^b` works nicely. Let's wrap base in parens if it's an Apply
+      std::string base = args[0]->to_string();
+      if (as_apply(args[0])) base = "(" + base + ")";
+      
+      std::string exp = args[1]->to_string();
+      // Remove outer parens from exp if any (though usually it's just a number)
+      return base + "^(" + exp + ")";
+    }
     if (head == "Log")
       return "ln(" + args[0]->to_string() + ")";
     if (head == "Exp")
