@@ -1,10 +1,11 @@
 ---
 title: ODE Solver
-emoji: 📐
-colorFrom: green
-colorTo: blue
+emoji: 🧠
+colorFrom: blue
+colorTo: green
 sdk: docker
 app_port: 7860
+pinned: false
 ---
 
 # ODE Solver
