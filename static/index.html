@@ -5,6 +5,23 @@
     <meta charset="UTF-8">
     <title>CAS Vision Interface</title>
     <link rel="stylesheet" href="/static/style.css">
+    <script>
+        MathJax = {
+            tex: {
+                inlineMath: [['$', '$'], ['\\(', '\\)']],
+                displayMath: [['$$', '$$'], ['\\[', '\\]']]
+            },
+            asciimath: {
+                delimiters: [['`', '`']]
+            },
+            svg: {
+                fontCache: 'global'
+            }
+        };
+    </script>
+    <script type="text/javascript" id="MathJax-script" async
+        src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-am-chtml.js">
+        </script>
 </head>
 
 <body>
@@ -19,13 +36,13 @@
         <div id="status"></div>
         <div id="output-box" class="hidden">
             <h3>Extracted LaTeX:</h3>
-            <pre id="latex-text"></pre>
-            
+            <div id="latex-text" class="math-display"></div>
+
             <h3>Parsed CAS String:</h3>
-            <pre id="cas-text"></pre>
-            
+            <div id="cas-text" class="math-display"></div>
+
             <h3>Analytical Solution:</h3>
-            <pre id="solution-text"></pre>
+            <div id="solution-text" class="math-display"></div>
         </div>
     </div>
 
